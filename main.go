@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,6 +13,9 @@ import (
 // json to struct golang
 // {"page":"words","input":"word1","words":["word1"]}
 
+type Response interface {
+	GetResponse() string
+}
 type Page struct {
 	Name string `json:"page"`
 }
@@ -23,8 +25,20 @@ type Words struct {
 	Words []string `json:"words"`
 }
 
+func (w Words) GetResponse() string {
+	return fmt.Sprintf("%s", strings.Join(w.Words, ", "))
+}
+
 type Occurrence struct {
 	Words map[string]int `json:"words"`
+}
+
+func (o Occurrence) GetResponse() string {
+	out := []string{}
+	for word, occurrence := range o.Words {
+		out = append(out, fmt.Sprintf("%s (%d)", word, occurrence))
+	}
+	return fmt.Sprintf("%s", strings.Join(out, ", "))
 }
 
 func main() {
@@ -35,15 +49,31 @@ func main() {
 		os.Exit(1)
 	}
 
-	if _, err := url.ParseRequestURI(args[1]); err != nil {
-		fmt.Printf("URL is in invalid format: %s\n", err)
+	res, err := doRequest(args[1])
+	if err != nil {
+		if requestErr, ok := err.(RequestError); ok {
+			fmt.Printf("Error: %s (HTTP Code: %d, Body: %s)\n", requestErr.Err, requestErr.HTTPCode, requestErr.Body)
+			os.Exit(1)
+		}
+	}
+
+	if res == nil {
+		fmt.Printf("No response\n")
 		os.Exit(1)
 	}
 
-	response, err := http.Get(args[1])
+	fmt.Printf("Response: %s\n", res.GetResponse())
+}
+
+func doRequest(requestURL string) (Response, error) {
+	if _, err := url.ParseRequestURI(requestURL); err != nil {
+		return nil, fmt.Errorf("validation error: URL is in invalid format: %s", err)
+	}
+
+	response, err := http.Get(requestURL)
 
 	if err != nil {
-		log.Fatal(err)
+		return nil, fmt.Errorf("http Get error: %s", err)
 	}
 
 	defer response.Body.Close()
@@ -51,19 +81,30 @@ func main() {
 	body, err := io.ReadAll(response.Body)
 
 	if err != nil {
-		log.Fatal(err)
+		return nil, fmt.Errorf("readAll error: %s", err)
 	}
 
 	if response.StatusCode != 200 {
-		fmt.Printf("Invalid output (HTTP Code %d): %s\n", response.StatusCode, body)
-		os.Exit(1)
+		return nil, fmt.Errorf("invalid output (HTTP Code %d): %s", response.StatusCode, string(body))
+	}
+
+	if !json.Valid(body) {
+		return nil, RequestError{
+			HTTPCode: response.StatusCode,
+			Body:     string(body),
+			Err:      fmt.Sprintf("No valid JSON returned!"),
+		}
 	}
 
 	var page Page
 
 	err = json.Unmarshal(body, &page)
 	if err != nil {
-		log.Fatal(err)
+		return nil, RequestError{
+			HTTPCode: response.StatusCode,
+			Body:     string(body),
+			Err:      fmt.Sprintf("Page unmarshal error: %s", err),
+		}
 	}
 
 	switch page.Name {
@@ -71,24 +112,27 @@ func main() {
 		var words Words
 		err = json.Unmarshal(body, &words)
 		if err != nil {
-			log.Fatal(err)
+			return nil, RequestError{
+				HTTPCode: response.StatusCode,
+				Body:     string(body),
+				Err:      fmt.Sprintf("Words unmarshal error: %s", err),
+			}
 		}
-		fmt.Printf("JSON Parsed\nPage: %s\nWords: %v\n", page.Name, strings.Join(words.Words, ", "))
+		return words, nil
+
 	case "occurrence":
 		var occurrence Occurrence
 		err = json.Unmarshal(body, &occurrence)
 		if err != nil {
-			log.Fatal(err)
+			return nil, RequestError{
+				HTTPCode: response.StatusCode,
+				Body:     string(body),
+				Err:      fmt.Sprintf("Occurrences unmarshal error: %s", err),
+			}
 		}
 
-		if val, ok := occurrence.Words["word1"]; ok {
-			fmt.Printf("Found word1: %d\n", val)
-		}
-
-		for word, occurrence := range occurrence.Words {
-			fmt.Printf("%s: %d\n", word, occurrence)
-		}
-	default:
-		fmt.Printf("Page not found\n")
+		return occurrence, nil
 	}
+
+	return nil, nil
 }
