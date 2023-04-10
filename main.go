@@ -14,10 +14,17 @@ import (
 // json to struct golang
 // {"page":"words","input":"word1","words":["word1"]}
 
+type Page struct {
+	Name string `json:"page"`
+}
+
 type Words struct {
-	Page  string   `json:"page"`
 	Input string   `json:"input"`
 	Words []string `json:"words"`
+}
+
+type Occurrence struct {
+	Words map[string]int `json:"words"`
 }
 
 func main() {
@@ -52,12 +59,36 @@ func main() {
 		os.Exit(1)
 	}
 
-	var words Words
+	var page Page
 
-	err = json.Unmarshal(body, &words)
+	err = json.Unmarshal(body, &page)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("JSON Parsed\nPage: %s\nWords: %v\n", words.Page, strings.Join(words.Words, ", "))
+	switch page.Name {
+	case "words":
+		var words Words
+		err = json.Unmarshal(body, &words)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("JSON Parsed\nPage: %s\nWords: %v\n", page.Name, strings.Join(words.Words, ", "))
+	case "occurrence":
+		var occurrence Occurrence
+		err = json.Unmarshal(body, &occurrence)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		if val, ok := occurrence.Words["word1"]; ok {
+			fmt.Printf("Found word1: %d\n", val)
+		}
+
+		for word, occurrence := range occurrence.Words {
+			fmt.Printf("%s: %d\n", word, occurrence)
+		}
+	default:
+		fmt.Printf("Page not found\n")
+	}
 }
